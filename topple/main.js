@@ -139,7 +139,7 @@ async function fly(f, to, ms, arc) {
 
 // ---------------------------------------------------------------- game state
 
-let scene = 'select';            // 'select' | 'play'
+let scene = 'select';            // 'select' | 'play' | 'tutorial'
 let easy = false;
 let match = null;                // { opp, wins, round, starter }
 let round = null;                // rules state
@@ -147,7 +147,8 @@ let turn = 0;
 let hand = null;                 // rolled die waiting at a hand mat { die, side, x, y, face, glow }
 let choosing = null;             // { die, resolve } while the player decides
 let hover = null;                // { side, t } under the pointer during the player's choice
-let aiPreview = null;            // move the opponent is about to make
+let scripted = null;             // preview shown without the pointer: { side, move } or { blocked: target }
+let tutorial = null;             // { step, dim, focus } while the rules walkthrough runs
 let overlay = null;              // { lines, buttons }
 let banner = null;               // { text, sub, t0 }
 let figureShake = 0;
@@ -158,7 +159,7 @@ let buttons = [];                // clickable rectangles for the current frame
 
 function resetBoardVisuals() {
   flyers = []; particles = []; popups = [];
-  hand = null; choosing = null; hover = null; aiPreview = null; overlay = null; banner = null; blockFlash = null;
+  hand = null; choosing = null; hover = null; scripted = null; overlay = null; banner = null; blockFlash = null;
   shown[0] = shown[1] = 0;
 }
 
@@ -166,6 +167,7 @@ function startMatch(opp) {
   flowId++;
   tweens.clear();
   scene = 'play';
+  tutorial = null;
   match = { opp, wins: [0, 0], round: 1, starter: 0 };
   playMatch(flowId);
 }
@@ -175,6 +177,7 @@ function toMenu() {
   tweens.clear();
   resetBoardVisuals();
   scene = 'select';
+  tutorial = null;
   match = null;
   round = null;
 }
@@ -238,9 +241,9 @@ async function playTurn(side) {
   } else {
     await wait(500);
     move = R.chooseMove(round, 1, die, match.opp.profile, easy ? EASY_NOISE : 0);
-    aiPreview = move;
+    scripted = { side: 1, move };
     await wait(650);
-    aiPreview = null;
+    scripted = null;
   }
   await moveAnimation(side, die, move);
 }
@@ -378,6 +381,7 @@ canvas.addEventListener('pointerdown', e => {
   pointer = toTexel(e);
   const button = buttons.find(b => pointer.x >= b.x && pointer.y >= b.y && pointer.x < b.x + b.w && pointer.y < b.y + b.h);
   if (button) { sfx.click(); button.action(); return; }
+  if (tutorial) { runStep(tutorial.step + 1); return; }
   if (!choosing) return;
   const target = targetAt(pointer);
   if (e.pointerType === 'touch') {
@@ -509,7 +513,8 @@ function renderSelect() {
   const b = { x: 320 - Math.floor(w / 2), y: 280, w, h: 13, action: () => { easy = !easy; } };
   A.drawText(ctx, label, 320, 283, inside(pointer, b) ? C.glow : easy ? C.candle : C.mist, { align: 'center', shadow: C.ink });
   buttons.push(b);
-  A.drawText(ctx, 'First to win 2 rounds takes the match.', 320, 312, C.steel, { align: 'center', shadow: C.ink });
+  A.drawText(ctx, 'First to win 2 rounds takes the match.', 320, 306, C.steel, { align: 'center', shadow: C.ink });
+  drawButton('HOW TO PLAY', 320, 322, startTutorial);
 }
 
 const blinkNow = seed => (now + seed * 1300) % 3400 < 140;
@@ -522,15 +527,16 @@ function renderPlay(sx, sy) {
   const fShake = figureShake > 0 ? (figureShake % 4 < 2 ? 1 : -1) : 0;
   ctx.drawImage(A.figureSprite(opp.id, blinkNow(0)), FIGURE_POS.x + fShake, FIGURE_POS.y);
 
+  if (tutorial) drawCaption();
   ctx.setTransform(1, 0, 0, 1, sx, sy);
   // preview of the move under consideration
-  const previewSide = choosing ? 0 : aiPreview ? 1 : null;
+  const previewSide = choosing ? 0 : scripted?.side ?? null;
   const die = choosing ? choosing.die : hand?.die;
   let preview = null; // { side, move } or { blocked: target }
   if (choosing && hover) {
     const move = moveFor(hover, 0, die.v);
     preview = move ? { side: 0, move } : { blocked: hover };
-  } else if (aiPreview) preview = { side: 1, move: aiPreview };
+  } else if (scripted) preview = scripted;
 
   const falling = new Set();
   if (preview?.move?.kind === 'raid') {
@@ -550,7 +556,7 @@ function renderPlay(sx, sy) {
         ctx.drawImage(A.dieSprite(d.v, d.o, style), p.x + jitter, p.y + lift);
       });
       // during the player's choice, opponent towers that cannot be raided are dimmed
-      if (choosing && side === 1 && !moveFor({ side, t }, 0, die.v)) {
+      if ((choosing || tutorial?.dim) && side === 1 && !moveFor({ side, t }, 0, die.v)) {
         const top = slotPos(1, t, Math.max(tower.length, 1) - 1).y - 2;
         dither(TOWER_X[t] - 12, top, 24, BASE_Y[1] + 5 - top);
       }
@@ -611,7 +617,7 @@ function renderPlay(sx, sy) {
   // wall info
   A.drawText(ctx, `ROUND ${match.round}`, 10, 6, C.candle, { shadow: C.ink });
   A.drawText(ctx, 'first to 2 rounds', 10, 16, C.steel, { shadow: C.ink });
-  drawTextButton('MENU', 578, 4, toMenu, 'right');
+  drawTextButton(tutorial ? 'SKIP' : 'MENU', 578, 4, toMenu, 'right');
   if (easy) A.drawText(ctx, 'EASY', 320, 6, C.steel, { align: 'center', shadow: C.ink });
 
   A.drawText(ctx, HINT, 320, 349, C.mist, { align: 'center' });
@@ -629,7 +635,8 @@ function renderPlay(sx, sy) {
 function drawPanel(side, delta) {
   const box = PANEL[side];
   const active = turn === side && !overlay && !banner;
-  panel(box.x, box.y, box.w, box.h, active ? C.candle : C.slate);
+  const focus = tutorial?.focus && Math.floor(now / 250) % 2 === 0;
+  panel(box.x, box.y, box.w, box.h, active || focus ? C.candle : C.slate);
   const x = box.x + 6;
   let y = box.y + 6;
   const name = side === 0 ? 'YOU' : match.opp.name.toUpperCase();
@@ -677,5 +684,110 @@ function renderOverlay() {
     });
   });
 }
+
+// ---------------------------------------------------------------- tutorial: the rules shown on the real board
+
+const TUTORIAL_KEY = 'topple.tutorialSeen';
+const dice = (owner, values) => values.map(v => ({ v, o: owner }));
+const board = (mine, theirs, loot, rollsLeft) => ({
+  towers: [mine.map(t => dice(0, t)), theirs.map(t => dice(1, t))],
+  loot: [dice(1, loot), []],
+  rollsLeft,
+});
+const RIVAL = [[2, 6], [5, 1, 3], [3, 1, 2]];
+
+// Rolls a die for the player, previews the move, then plays it with the game's own animations.
+async function demoMove(v, move) {
+  const die = { v, o: 0 };
+  await rollAnimation(0, die);
+  scripted = { side: 0, move };
+  await wait(900);
+  scripted = null;
+  await moveAnimation(0, die, move);
+  await wait(700);
+}
+
+const TUTORIAL = [
+  {
+    caption: 'You roll a die. Stack it on one of your towers: its pips count for you.',
+    board: () => board([[3], [], [2]], RIVAL, [], [10, 10]),
+    play: () => demoMove(4, { kind: 'build', t: 1 }),
+  },
+  {
+    caption: 'Or throw it at their tower: lower dice fall off the top, one by one, to you.',
+    board: () => board([[3], [4], [2]], RIVAL, [], [9, 10]),
+    play: () => demoMove(5, { kind: 'raid', t: 2 }),
+  },
+  {
+    caption: 'The throw stops at a die as high or higher: that die holds.',
+    board: () => board([[3], [4], [2]], [[2, 6], [5, 1, 3], []], [2, 1, 3], [8, 10]),
+    play: () => demoMove(4, { kind: 'raid', t: 1 }),
+  },
+  {
+    caption: 'A 6 on top is always safe. A 1 can never raid.',
+    board: () => board([[3], [4], [2]], [[2, 6], [5], []], [2, 1, 3, 3, 1], [7, 10]),
+    play: async () => {
+      tutorial.dim = true;
+      await rollAnimation(0, { v: 5, o: 0 });
+      scripted = { blocked: { side: 1, t: 0 } };
+      await wait(1300);
+      scripted = null;
+      await rollAnimation(0, { v: 1, o: 0 });
+      await wait(1100);
+      tutorial.dim = false;
+      await moveAnimation(0, hand.die, { kind: 'build', t: 2 });
+      await wait(500);
+    },
+  },
+  {
+    caption: '10 rolls each. Score = towers + loot. Win 2 rounds to take the match.',
+    board: () => board([[3], [4], [2, 1]], [[2, 6], [5], []], [2, 1, 3, 3, 1], [6, 10]),
+    play: async () => {
+      tutorial.focus = true;
+      await tween(1400, k => {
+        round.rollsLeft[0] = Math.round(lerp(6, 0, k));
+        round.rollsLeft[1] = Math.round(lerp(10, 0, k));
+      });
+      for (const w of [1, 2]) { await wait(450); match.wins[0] = w; sfx.loot(w * 2); }
+      sfx.win();
+      await wait(1500);
+    },
+  },
+];
+
+function startTutorial() {
+  try { localStorage.setItem(TUTORIAL_KEY, '1'); } catch { /* storage may be blocked */ }
+  scene = 'tutorial';
+  match = { opp: OPPONENTS[0], wins: [0, 0], round: 1, starter: 0 };
+  runStep(0);
+}
+
+// Each step starts from its own board, so a click can jump straight to the next one.
+async function runStep(i) {
+  flowId++;
+  tweens.clear();
+  resetBoardVisuals();
+  if (i >= TUTORIAL.length) { toMenu(); return; }
+  const id = flowId;
+  tutorial = { step: i, dim: false, focus: false };
+  match.wins = [0, 0];
+  turn = 0;
+  round = TUTORIAL[i].board();
+  shown[0] = R.score(round, 0);
+  shown[1] = R.score(round, 1);
+  await wait(500);
+  await TUTORIAL[i].play();
+  if (id === flowId) runStep(i + 1);
+}
+
+function drawCaption() {
+  panel(64, 186, 512, 30, C.amber);
+  A.drawText(ctx, `HOW TO PLAY  ${tutorial.step + 1}/${TUTORIAL.length}   click for next`, 320, 190, C.candle, { align: 'center' });
+  A.drawText(ctx, TUTORIAL[tutorial.step].caption, 320, 203, C.cream, { align: 'center', shadow: C.ink });
+}
+
+let tutorialSeen = false;
+try { tutorialSeen = localStorage.getItem(TUTORIAL_KEY) === '1'; } catch { /* storage may be blocked */ }
+if (!tutorialSeen) startTutorial();
 
 requestAnimationFrame(frame);
