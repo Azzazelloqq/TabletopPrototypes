@@ -8,11 +8,13 @@ export const KINDS = {
   g1: { v: 1, label: '+1' },
   g2: { v: 2, label: '+2' },
   g3: { v: 3, label: '+3' },
-  crown: { v: 5, label: '+5' },
+  straw: { v: 0, label: '0' },
+  mouse: { v: -1, label: '-1' },
   rat: { v: -2, label: '-2' },
-  plague: { v: -4, label: '-4' },
+  plague: { v: -3, label: '-3' },
 };
-const BAG = [['g1', 9], ['g2', 7], ['g3', 4], ['crown', 1], ['rat', 9], ['plague', 3]];
+// 33 sacks, values -3..+3; mix chosen by simulation (see the balance notes in the commit).
+const BAG = [['g1', 8], ['g2', 5], ['g3', 3], ['straw', 3], ['mouse', 8], ['rat', 4], ['plague', 2]];
 
 let nextId = 1;
 
@@ -71,7 +73,7 @@ export const RIVALS = [
   { name: 'HESK', style: 'CAUTIOUS', blurb: 'KEEPS RATS OFF HER OWN DOORSTEP.',
     w: { gift: 1, guard: 0.7, next: 0, late: 0 } },
   { name: 'VELL', style: 'EXPERT', blurb: 'COUNTS EVERY SACK, PLANS FOR THE END.',
-    w: { gift: 1, guard: 0.7, next: 0.5, late: 1 } },
+    w: { gift: 1, guard: 0.7, next: 0.75, late: 0.5 } },
 ];
 
 const min = (a) => Math.min(...a);

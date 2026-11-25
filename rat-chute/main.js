@@ -37,7 +37,7 @@ function tone(f1, f2, dur, type = 'square', vol = 0.05, delay = 0) {
 const sfx = {
   tick: () => tone(700, 600, 0.03),
   thud: () => tone(120, 55, 0.12, 'square', 0.06),
-  land: (v) => v > 0
+  land: (v) => v === 0 ? tone(160, 90, 0.1, 'triangle', 0.06) : v > 0
     ? (tone(988, 988, 0.06, 'triangle', 0.08), tone(1319, 1319, 0.1, 'triangle', 0.08, 0.06))
     : (tone(900, 1700, 0.08, 'sawtooth', 0.03), tone(1500, 800, 0.08, 'sawtooth', 0.03, 0.09)),
   win: () => [523, 659, 784, 1047].forEach((f, i) => tone(f, f, 0.12, 'triangle', 0.07, i * 0.1)),
@@ -54,8 +54,8 @@ window.ratChute = game; // for debugging in the console
 
 const rival = () => R.RIVALS[game.rival];
 const label = (s) => R.KINDS[s.kind].label;
-const good = (v) => (v > 0 ? PAL.Q : PAL.E);
-const bad = (v) => (v > 0 ? PAL.E : PAL.Q);
+const good = (v) => (v > 0 ? PAL.Q : v < 0 ? PAL.E : PAL.C);
+const bad = (v) => good(-v);
 
 function startMatch(i) {
   game.rival = i; game.wins = [0, 0]; game.round = 0; game.nextStarter = YOU;
@@ -188,7 +188,8 @@ function box(x, y, w, h, c, t = 1) {
   ctx.fillRect(x, y, t, h); ctx.fillRect(x + w - t, y, t, h);
 }
 function sackFrame(s, now) {
-  if (s.kind === 'rat') return Math.floor(now / 230 + s.id) % 2;
+  if (s.kind === 'straw') return 0;
+  if (s.kind === 'rat' || s.kind === 'mouse') return Math.floor(now / 230 + s.id) % 2;
   if (s.kind === 'plague') return Math.floor(now / 140 + s.id) % 2;
   return (now / 90 + s.id * 13) % 45 < 3 ? 1 : 0;
 }

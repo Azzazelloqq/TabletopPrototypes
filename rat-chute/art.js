@@ -66,8 +66,9 @@ const strWidth = (s, scale) => [...s].reduce((w, ch) => w + (GLYPHS[ch][0].lengt
 export const SACK_W = 34, SACK_H = 38;
 const BODY = { 13: 6, 14: 6, 15: 8, 16: 10, 17: 12, 18: 13, 19: 14, 33: 14, 34: 13, 35: 11, 36: 8 };
 const bodyHw = (y) => BODY[y] ?? 15;
-const TEXT_COLOR = { g1: 'Y', g2: 'Y', g3: 'Y', crown: 'Y', rat: 'E', plague: 'Q' };
-const LABEL = { g1: '+1', g2: '+2', g3: '+3', crown: '+5', rat: '-2', plague: '-4' };
+const TEXT_COLOR = { g1: 'Y', g2: 'Y', g3: 'Y', straw: 'C', mouse: 'E', rat: 'E', plague: 'E' };
+const LABEL = { g1: '+1', g2: '+2', g3: '+3', straw: '0', mouse: '-1', rat: '-2', plague: '-3' };
+const CRITTER = { mouse: ['H', 'b', 'p', 'k'], rat: ['R', 'r', 'p', 'k'], plague: ['Q', 'P', 'v', 'E'] };
 
 function sackBody(g, tied) {
   for (let y = 13; y <= 36; y++) {
@@ -100,8 +101,24 @@ function sparkle(g, x, y) {
   g.set(x, y, 'c'); g.set(x - 1, y, 'Y'); g.set(x + 1, y, 'Y'); g.set(x, y - 1, 'Y'); g.set(x, y + 1, 'Y');
 }
 
-function ratHead(g, frame, plague) {
-  const [body, shade, inner, eye] = plague ? ['Q', 'P', 'v', 'E'] : ['R', 'r', 'p', 'k'];
+function mouseHead(g, frame) {
+  const [body, shade, inner, eye] = CRITTER.mouse;
+  const dx = frame ? 1 : 0, cy = frame ? 8 : 9;
+  g.ellipse(13 + dx, cy - 3, 1.8, 1.8, body); g.set(13 + dx, cy - 3, inner);
+  g.ellipse(21 + dx, cy - 3, 1.8, 1.8, body); g.set(21 + dx, cy - 3, inner);
+  g.ellipse(17 + dx, cy, 4.4, 3.2, body, shade);
+  g.set(15 + dx, cy - 1, eye); g.set(19 + dx, cy - 1, eye);
+  g.set(17 + dx, cy + 2, inner);
+  g.set(12 - dx, 11, inner); g.set(22 + dx, 11, inner);
+}
+
+function straw(g) {
+  const tufts = [[10, 6], [12, 3], [14, 5], [16, 2], [18, 4], [20, 3], [22, 6], [24, 7]];
+  for (const [x, top] of tufts) for (let y = top; y <= 10; y++) g.set(x + (y < top + 2 && x % 4 === 0 ? 1 : 0), y, y < 6 ? 'T' : (x + y) % 3 ? 'L' : 'T');
+}
+
+function ratHead(g, frame, kind) {
+  const [body, shade, inner, eye] = CRITTER[kind], plague = kind === 'plague';
   const dx = frame ? 1 : 0, cy = frame ? 7 : 8;
   g.ellipse(11 + dx, cy - 4, 2.3, 2.3, body); g.set(11 + dx, cy - 4, inner);
   g.ellipse(23 + dx, cy - 4, 2.3, 2.3, body); g.set(23 + dx, cy - 4, inner);
@@ -114,17 +131,6 @@ function ratHead(g, frame, plague) {
   const pawY = 11;
   g.set(10 - dx, pawY, inner); g.set(11 - dx, pawY, inner);
   g.set(23 + dx, pawY, inner); g.set(24 + dx, pawY, inner);
-}
-
-function crown(g, glint) {
-  g.rect(10, 6, 14, 5, 'G');
-  for (const sx of [10, 16, 22]) for (let j = 0; j < 4; j++) {
-    g.set(sx + 1, 2 + j, 'G'); if (j > 0) { g.set(sx, 2 + j, 'G'); g.set(sx + 2, 2 + j, 'G'); }
-  }
-  g.rect(10, 10, 14, 1, 'g');
-  g.set(11, 7, 'Y'); g.set(11, 8, 'Y'); g.set(17, 2, 'Y');
-  g.set(16, 8, 'e'); g.set(17, 8, 'e'); g.set(12, 9, 'n'); g.set(21, 9, 'n');
-  if (glint) sparkle(g, 24, 2);
 }
 
 const COINS = {
@@ -140,8 +146,9 @@ function makeSack(kind, frame) {
   if (COINS[kind]) {
     for (const [x, y] of COINS[kind]) coin(g, x, y);
     if (frame) { const [x, y] = COINS[kind].at(-1); sparkle(g, x + 2, y - 2); }
-  } else if (kind === 'crown') crown(g, frame);
-  else ratHead(g, frame, kind === 'plague');
+  } else if (kind === 'straw') straw(g);
+  else if (kind === 'mouse') mouseHead(g, frame);
+  else ratHead(g, frame, kind);
   g.outline();
   // value plate
   g.rect(5, 19, 24, 16, 'k');
@@ -166,9 +173,10 @@ function makeMini(kind) {
   for (let y = 5; y <= 13; y++) for (let x = 9 - hws[y]; x <= 8 + hws[y]; x++) g.set(x, y, x < 7 - hws[y] + 4 && y < 12 ? 'T' : x > 10 ? 's' : 'S');
   g.rect(6, 4, 6, 1, 'B');
   if (COINS[kind]) { g.rect(6, 2, 3, 2, 'G'); g.rect(10, 2, 3, 2, 'G'); g.set(6, 2, 'Y'); g.set(10, 2, 'Y'); if (kind !== 'g1') g.rect(8, 1, 2, 2, 'G'); }
-  else if (kind === 'crown') { g.rect(6, 2, 7, 2, 'G'); g.set(6, 1, 'G'); g.set(9, 0, 'G'); g.set(9, 1, 'G'); g.set(12, 1, 'G'); g.set(9, 2, 'e'); }
+  else if (kind === 'straw') { for (const x of [6, 8, 10, 12]) g.rect(x, x % 4 ? 0 : 1, 1, 4 - (x % 4 ? 0 : 1), 'T'); }
+  else if (kind === 'mouse') { const [b, , , eye] = CRITTER.mouse; g.rect(7, 2, 5, 2, b); g.set(7, 1, b); g.set(11, 1, b); g.set(8, 2, eye); g.set(10, 2, eye); }
   else {
-    const [b, eye] = kind === 'plague' ? ['Q', 'E'] : ['R', 'k'];
+    const [b, , , eye] = CRITTER[kind];
     g.rect(6, 1, 7, 3, b); g.set(5, 0, b); g.set(13, 0, b); g.set(7, 2, eye); g.set(11, 2, eye);
   }
   g.outline();
@@ -332,7 +340,7 @@ function makeBackground() {
 
 // ---- Exported sprite set ----
 export function buildArt() {
-  const kinds = ['g1', 'g2', 'g3', 'crown', 'rat', 'plague'];
+  const kinds = ['g1', 'g2', 'g3', 'straw', 'mouse', 'rat', 'plague'];
   const sack = {}, mini = {};
   for (const k of kinds) { sack[k] = [makeSack(k, 0), makeSack(k, 1)]; mini[k] = makeMini(k); }
   return {
