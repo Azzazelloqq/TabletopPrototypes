@@ -39,12 +39,6 @@ export function newRound(starter) {
 export const total = (yard) => yard.reduce((s, x) => s + x.v, 0);
 export const isRoundOver = (st) => st.hands[0].length === 0 && st.hands[1].length === 0;
 
-// What a shove would do, without changing the state.
-export function previewShove(st, who, handIdx, k) {
-  const c = st.chutes[k];
-  return { sack: st.hands[who][handIdx], dropped: who === YOU ? c[2] : c[0] };
-}
-
 export function applyShove(st, who, handIdx, k) {
   const c = st.chutes[k];
   const [sack] = st.hands[who].splice(handIdx, 1);
