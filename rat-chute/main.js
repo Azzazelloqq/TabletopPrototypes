@@ -102,7 +102,7 @@ function startShove(who, h, k, now) {
     flyers.push({ sack: s, keys });
   });
   const dropped = c[exit];
-  game.hover = null; game.armed = null;
+  game.hover = null; game.armed = null; shownPv = null;
   game.anim = {
     flyers, end: t3, events: [[t1, sfx.thud], [t3, () => sfx.land(dropped.v)]],
     done: () => {
@@ -264,30 +264,78 @@ function previewInfo() {
   return { k, ...R.previewShove(game.st, YOU, game.sel, k) };
 }
 
+// ---- move preview: an overlay on the unchanged board, faded in and out ----
+let shownPv = null, lastNow = 0;
+function fadePreview(target, now) {
+  const step = Math.min(50, now - lastNow) / 170;
+  lastNow = now;
+  if (target && (!shownPv || shownPv.k !== target.k || shownPv.sack !== target.sack))
+    shownPv = { ...target, alpha: shownPv?.k === target.k ? shownPv.alpha : 0 };
+  if (!shownPv) return null;
+  shownPv.alpha = Math.max(0, Math.min(1, shownPv.alpha + (target ? step : -step)));
+  if (!target && shownPv.alpha === 0) shownPv = null;
+  return shownPv;
+}
+// Gentle looping push toward the rival, a few texels at most.
+const nudge = (pv, now) => -Math.round(pv.alpha * 3 * (1 - Math.cos((2 * Math.PI * now) / 900)) / 2);
+const GHOST_Y = L.slotY[0] + 62;
+
+function dashedBox(x, y, w, h, color, now) {
+  ctx.fillStyle = color;
+  const off = Math.floor(now / 110);
+  const on = (i) => (i + off) % 6 < 3;
+  for (let i = 0; i < w; i++) { if (on(i)) { ctx.fillRect(x + i, y, 1, 1); ctx.fillRect(x + w - 1 - i, y + h - 1, 1, 1); } }
+  for (let j = 0; j < h; j++) { if (on(j)) { ctx.fillRect(x + w - 1, y + j, 1, 1); ctx.fillRect(x, y + h - 1 - j, 1, 1); } }
+}
+
+function drawPreviewOverlay(pv, now) {
+  const st = game.st, cx = L.chuteX[pv.k], off = nudge(pv, now), a = pv.alpha;
+  ctx.save();
+  ctx.globalAlpha = 0.45 * a; ctx.fillStyle = PAL.k;
+  for (let k = 0; k < 3; k++) if (k !== pv.k) ctx.fillRect(L.chuteX[k] - 22, L.chuteTop - 2, 44, L.chuteBottom - L.chuteTop + 4);
+  ctx.globalAlpha = a;
+  dashedBox(cx - 23, L.chuteTop - 3, 46, L.chuteBottom - L.chuteTop + 6, PAL.F, now);
+  // slide direction between the sacks
+  for (const y of [(L.slotY[0] + GHOST_Y) / 2, (L.slotY[0] + L.slotY[1]) / 2, (L.slotY[1] + L.slotY[2]) / 2])
+    drawText(ctx, '^', cx, y - 4 + off, PAL.F, { align: 'center', shadow: PAL.k });
+  // the sack that would drop, and where it would land
+  sackBox(cx, L.slotY[2] + off, bad(pv.dropped.v));
+  const land = yardCell(RIVAL, st.yards[RIVAL].length);
+  const x0 = cx, y0 = L.slotY[2] - 22 + off, x1 = land.x + 9, y1 = land.y + 24;
+  ctx.fillStyle = PAL.F;
+  for (let i = 1; i < 14; i++) {
+    const t = ((i + (now / 140) % 1) / 14), u = 1 - t; // marching dots on a curve
+    const x = u * u * x0 + 2 * u * t * x0 + t * t * x1, y = u * u * y0 + 2 * u * t * y1 + t * t * y1;
+    ctx.fillRect(R0(x) - 1, R0(y) - 1, 2, 2);
+  }
+  ctx.globalAlpha = 0.6 * a;
+  ctx.drawImage(art.mini[pv.dropped.kind], land.x, land.y);
+  ctx.globalAlpha = a;
+  dashedBox(land.x - 1, land.y - 1, 20, 25, bad(pv.dropped.v), now);
+  // ghost of the hand sack at the entry: it becomes your doorstep
+  ctx.globalAlpha = 0.55 * a;
+  drawSack(pv.sack, cx, GHOST_Y + off, now);
+  ctx.globalAlpha = a;
+  dashedBox(cx - 19, GHOST_Y + off - 21, 38, 42, good(pv.sack.v), now);
+  if (pv.sack.v < 0) {
+    ctx.fillStyle = PAL.k; ctx.fillRect(cx + 13, GHOST_Y + off - 25, 9, 11);
+    ctx.fillStyle = PAL.E; ctx.fillRect(cx + 14, GHOST_Y + off - 24, 7, 9);
+    drawText(ctx, '!', cx + 17, GHOST_Y + off - 23, PAL.c);
+  }
+  ctx.restore();
+}
+
 function renderChute(k, now, pv) {
   const st = game.st, cx = L.chuteX[k], hidden = game.anim ? new Set(game.anim.flyers.map((f) => f.sack?.id)) : null;
-  if (pv && pv.k === k) {
-    // Ghost of the board after the shove.
-    box(cx - 23, L.chuteTop - 2, 46, L.chuteBottom - L.chuteTop + 4, PAL.F);
-    const after = [pv.sack, st.chutes[k][0], st.chutes[k][1]];
-    after.forEach((s, i) => drawSack(s, cx, L.slotY[i], now));
-    if (blink(now)) sackBox(cx, L.slotY[0], good(pv.sack.v));
-    const ty = L.slotY[2] - L.stepY;
-    drawSack(pv.dropped, cx, ty, now);
-    sackBox(cx, ty, blink(now) ? bad(pv.dropped.v) : PAL.k);
-    drawText(ctx, '^', cx + 24, ty + 10, PAL.c, { shadow: PAL.k });
-    drawText(ctx, '^', cx + 24, L.slotY[2] - 4, PAL.c, { shadow: PAL.k });
-    return;
-  }
+  const off = pv && pv.k === k ? nudge(pv, now) : 0;
   const aiPick = game.ai?.move?.k === k;
   if (aiPick) box(cx - 23, L.chuteTop - 2, 46, L.chuteBottom - L.chuteTop + 4, PAL.E);
-  else if (yourMove() && game.hover === k) box(cx - 23, L.chuteTop - 2, 46, L.chuteBottom - L.chuteTop + 4, PAL.F);
-  st.chutes[k].forEach((s, i) => { if (s && !hidden?.has(s.id)) drawSack(s, cx, L.slotY[i], now); });
+  st.chutes[k].forEach((s, i) => { if (s && !hidden?.has(s.id)) drawSack(s, cx, L.slotY[i] + off, now); });
   if (aiPick && blink(now)) sackBox(cx, L.slotY[0], good(st.chutes[k][0].v));
 }
 
 function renderBoard(now) {
-  const st = game.st, r = rival(), pv = previewInfo();
+  const st = game.st, r = rival(), target = previewInfo(), pv = fadePreview(target, now);
   const hidden = game.anim ? new Set(game.anim.flyers.map((f) => f.sack.id)) : new Set();
   drawCandles(now);
 
@@ -320,6 +368,7 @@ function renderBoard(now) {
   // yards
   for (const who of [YOU, RIVAL])
     st.yards[who].forEach((s, i) => { const c = yardCell(who, i); ctx.drawImage(art.mini[s.kind], c.x, c.y); });
+  if (pv) drawPreviewOverlay(pv, now);
 
   // hands
   drawText(ctx, 'YOUR', 486, 314, PAL.C, { align: 'right' });
@@ -343,14 +392,15 @@ function renderBoard(now) {
   if (game.banner || game.screen !== 'play') drawText(ctx, 'ROUND OVER', px, 72, PAL.F, { scale: 2, align: 'center' });
   else if (st.turn === YOU) drawText(ctx, 'YOUR TURN', px, 72, PAL.F, { scale: 2, align: 'center' });
   else drawText(ctx, `${r.name}'S TURN`, px, 72, PAL.E, { scale: 2, align: 'center' });
-  if (pv) {
-    const rivalDoor = game.st.chutes[pv.k][1];
-    drawText(ctx, `SHOVE ${label(pv.sack)} INTO THE ${CHUTE_NAMES[pv.k]} CHUTE:`, px, 96, PAL.c, { align: 'center' });
-    drawText(ctx, `FALLS TO ${r.name}: ${label(pv.dropped)}`, 458, 114, bad(pv.dropped.v));
-    drawText(ctx, `ON YOUR DOORSTEP: ${label(pv.sack)}`, 458, 128, good(pv.sack.v));
-    drawText(ctx, `ON ${r.name}'S DOORSTEP: ${label(rivalDoor)}`, 458, 142, PAL.C);
-    wrap(`${r.name} CAN PUSH YOUR DOORSTEP SACK INTO YOUR YARD. CLICK TO SHOVE.`, 166)
-      .forEach((line, j) => drawText(ctx, line, 458, 164 + j * 11, PAL.C));
+  if (target) {
+    const t = target, rivalDoor = game.st.chutes[t.k][1];
+    drawText(ctx, `PREVIEW: ${label(t.sack)} INTO ${CHUTE_NAMES[t.k]} CHUTE`, px, 94, PAL.F, { align: 'center' });
+    drawText(ctx, `FALLS TO ${r.name}: ${label(t.dropped)}`, 458, 112, bad(t.dropped.v));
+    drawText(ctx, `ON YOUR DOORSTEP: ${label(t.sack)}`, 458, 126, good(t.sack.v));
+    drawText(ctx, `ON ${r.name}'S DOORSTEP: ${label(rivalDoor)}`, 458, 140, PAL.C);
+    wrap(`${r.name} CAN PUSH YOUR DOORSTEP SACK INTO YOUR YARD.`, 166)
+      .forEach((line, j) => drawText(ctx, line, 458, 158 + j * 11, PAL.C));
+    drawText(ctx, game.armed !== null ? 'TAP AGAIN TO SHOVE' : 'CLICK TO SHOVE', px, 196, PAL.F, { align: 'center' });
   } else {
     if (yourMove()) drawText(ctx, 'PICK A SACK, THEN A CHUTE', px, 92, PAL.C, { align: 'center' });
     else if (game.ai?.move) drawText(ctx, `SHOVES ${label(st.hands[RIVAL][game.ai.move.h])} INTO THE ${CHUTE_NAMES[game.ai.move.k]} CHUTE`, px, 92, PAL.E, { align: 'center' });
