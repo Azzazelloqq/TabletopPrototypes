@@ -268,8 +268,9 @@ export const LAYOUT = {
   slotY: [256, 178, 100], // slot 0 = your doorstep (bottom), slot 2 = rival doorstep (top)
   stepY: 78,
   chuteTop: 56, chuteBottom: 298,
-  yardX: 202, yardTop: 6, yardBottom: 300, yardCols: 13, cellW: 18, cellH: 24,
-  handX: [508, 556], handY: [326, 28], // handY indexed by player: [you, rival]
+  yardX: 448, yardTop: 6, yardBottom: 300, yardCols: 8, cellW: 15, cellH: 24, // a yard ends with 15 sacks
+  totalX: 632, // right edge of the yard totals
+  handX: [275, 365], handY: [326, 28], // hands sit between the chutes; handY indexed by player: [you, rival]
   candles: [[22, 236], [608, 236]],
 };
 
@@ -309,6 +310,13 @@ function makeBackground() {
     for (let x = yx; x < yx + yw; x++) { g.set(x, y0 + 1, 'B'); g.set(x, y1 - 2, 'B'); g.set(x, y0 + 2, 'k'); g.set(x, y1 - 1, 'k'); }
     for (let x = yx; x <= yx + yw; x += 12) for (let y = y0; y < y1; y++) if (y < y0 + 4 || y > y1 - 5) g.set(x, y, 'L');
     for (let y = y0 + 1; y < y1 - 1; y++) { g.set(yx, y, 'B'); g.set(yx + yw, y, 'B'); }
+  }
+  // wooden trays that hold each hand, between the chutes
+  for (const y0 of [3, 301]) {
+    const x0 = LAYOUT.handX[0] - 26, w = LAYOUT.handX[1] - LAYOUT.handX[0] + 52;
+    g.rect(x0, y0, w, 46, 'k'); g.rect(x0 + 1, y0 + 1, w - 2, 44, 'b');
+    g.rect(x0 + 1, y0 + 1, w - 2, 1, 'L'); g.rect(x0 + 1, y0 + 44, w - 2, 1, 'D');
+    for (let x = x0 + 8; x < x0 + w - 4; x += 16) g.rect(x, y0 + 2, 1, 42, 'D');
   }
   g.rect(0, 349, 640, 11, 'k');
   // side panels in the wall

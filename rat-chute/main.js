@@ -48,7 +48,7 @@ const sfx = {
 const game = {
   screen: 'select', rival: 0, easy: false, st: null, wins: [0, 0], round: 0, nextStarter: YOU,
   sel: 0, hover: null, armed: null, mouse: { x: -1, y: -1 }, log: [], anim: null, ai: null,
-  result: null, banner: null, buttons: [],
+  result: null, banner: null, buttons: [], shown: [0, 0], bumped: [0, 0], floaters: [], handHover: null, wiggle: 0,
 };
 window.ratChute = game; // for debugging in the console
 
@@ -67,7 +67,7 @@ function startRound() {
   game.st = R.newRound(game.nextStarter);
   game.log = [{ text: `ROUND ${game.round}: ${game.nextStarter === YOU ? 'YOU SHOVE' : rival().name + ' SHOVES'} FIRST`, color: PAL.C }];
   game.nextStarter = 1 - game.nextStarter;
-  Object.assign(game, { screen: 'play', sel: 0, hover: null, armed: null, anim: null, ai: null, result: null, banner: null });
+  Object.assign(game, { screen: 'play', sel: null, hover: null, armed: null, anim: null, ai: null, result: null, banner: null, shown: [0, 0], floaters: [] });
 }
 
 function addLog(text, color) {
@@ -77,7 +77,7 @@ function addLog(text, color) {
 
 // ---- positions ----
 function handCenter(who, i, raised) {
-  const y = L.handY[who] + (raised ? (who === YOU ? -6 : 6) : 0);
+  const y = L.handY[who] + (raised ? (who === YOU ? -8 : 6) : 0);
   return { x: L.handX[i], y };
 }
 function yardCell(who, i) {
@@ -87,6 +87,13 @@ function yardCell(who, i) {
   };
 }
 const yardCenter = (who, i) => { const c = yardCell(who, i); return { x: c.x + 9, y: c.y + 11 }; };
+const totalPos = (who) => ({ x: L.totalX - 14, y: who === RIVAL ? 26 : 322 });
+
+// A "+N" that flies from a landed sack to its yard total; the total counts it on arrival.
+function scoreFloat(who, i, v, t0) {
+  const from = yardCenter(who, i), to = totalPos(who);
+  game.floaters.push({ who, v, t0, end: t0 + 650, x0: from.x, y0: from.y - 6, x1: to.x, y1: to.y });
+}
 
 // ---- animation: sacks fly along timed keys [t, x, y, hop] ----
 function startShove(who, h, k, now) {
@@ -107,24 +114,29 @@ function startShove(who, h, k, now) {
     flyers, end: t3, events: [[t1, sfx.thud], [t3, () => sfx.land(dropped.v)]],
     done: () => {
       R.applyShove(st, who, h, k);
+      scoreFloat(1 - who, st.yards[1 - who].length - 1, dropped.v, t3);
       if (who === YOU) addLog(`YOU: ${label(sack)} IN, ${rival().name} GETS ${label(dropped)}`, bad(dropped.v));
       else addLog(`${rival().name}: ${label(sack)} IN, YOU GET ${label(dropped)}`, good(dropped.v));
       if (R.isRoundOver(st)) startDoorsteps(t3);
-      else game.sel = 0;
+      else game.sel = st.hands[YOU].length === 1 ? 0 : null;
     },
   };
 }
 
 function startDoorsteps(now) {
   const st = game.st, flyers = [], events = [];
-  game.banner = 'HANDS EMPTY - DOORSTEPS DROP!';
+  game.banner = 'DOORSTEPS DROP!';
   st.chutes.forEach((c, k) => {
     const t = now + 700 + k * 650, cx = L.chuteX[k];
     for (const [who, slot] of [[YOU, 0], [RIVAL, 2]]) {
       const to = yardCenter(who, st.yards[who].length + k);
       flyers.push({ sack: c[slot], keys: [[now, cx, L.slotY[slot]], [t, cx, L.slotY[slot]], [t + 450, to.x, to.y, true]] });
     }
-    events.push([t + 450, () => sfx.land(c[0].v + c[2].v || 1)]);
+    const iy = st.yards[YOU].length + k, ir = st.yards[RIVAL].length + k;
+    events.push([t + 450, () => {
+      sfx.land(c[0].v + c[2].v || 1);
+      scoreFloat(YOU, iy, c[0].v, t + 450); scoreFloat(RIVAL, ir, c[2].v, t + 450);
+    }]);
   });
   game.anim = {
     flyers, events, end: now + 700 + 3 * 650 + 500,
@@ -158,6 +170,8 @@ function flyerPos(f, now) {
 
 // ---- update ----
 function update(now) {
+  for (const f of game.floaters) if (now >= f.end) { game.shown[f.who] += f.v; game.bumped[f.who] = now; }
+  game.floaters = game.floaters.filter((f) => now < f.end);
   const a = game.anim;
   if (a) {
     while (a.events.length && now >= a.events[0][0]) a.events.shift()[1]();
@@ -258,7 +272,7 @@ function drawCandles(now) {
 }
 
 function previewInfo() {
-  if (!yourMove()) return null;
+  if (!yourMove() || game.sel === null) return null;
   const k = game.armed ?? game.hover;
   if (k === null) return null;
   return { k, ...R.previewShove(game.st, YOU, game.sel, k) };
@@ -348,10 +362,11 @@ function renderBoard(now) {
   pips(10, 326, game.wins[YOU]);
   drawText(ctx, 'ROUNDS', 32, 327, PAL.C);
   drawText(ctx, 'ROUNDS', 70, 39, PAL.C);
-  for (const [who, y] of [[RIVAL, 6], [YOU, 304]]) {
-    drawText(ctx, 'YARD', 186, y, PAL.C, { align: 'right' });
-    const t = R.total(st.yards[who]);
-    drawText(ctx, String(t), 186, y + 11, t < 0 ? PAL.E : PAL.Y, { scale: 3, align: 'right', shadow: PAL.k });
+  // yard totals at the side, next to the yards; they count each sack when its score arrives
+  for (const [who, y] of [[RIVAL, 6], [YOU, 303]]) {
+    drawText(ctx, 'YARD', L.totalX, y, PAL.C, { align: 'right' });
+    const t = game.shown[who], fresh = now - game.bumped[who] < 220;
+    drawText(ctx, String(t), L.totalX, y + 11 - (fresh ? 2 : 0), fresh ? PAL.c : t < 0 ? PAL.E : PAL.Y, { scale: 3, align: 'right', shadow: PAL.k });
   }
 
   // left panel: round and bag
@@ -370,15 +385,19 @@ function renderBoard(now) {
     st.yards[who].forEach((s, i) => { const c = yardCell(who, i); ctx.drawImage(art.mini[s.kind], c.x, c.y); });
   if (pv) drawPreviewOverlay(pv, now);
 
-  // hands
-  drawText(ctx, 'YOUR', 486, 314, PAL.C, { align: 'right' });
-  drawText(ctx, 'HAND', 486, 324, PAL.C, { align: 'right' });
+  // your hand: bobs while waiting for a pick, lifts on hover, stays up and framed when picked
+  const mine = yourMove();
   st.hands[YOU].forEach((s, i) => {
     if (hidden.has(s.id)) return;
-    const raised = i === game.sel && st.turn === YOU;
-    const p = handCenter(YOU, i, raised);
-    drawSack(s, p.x, p.y, now);
-    if (raised && yourMove()) sackBox(p.x, p.y, PAL.F);
+    const picked = i === game.sel && mine, over = mine && game.handHover === i;
+    const p = handCenter(YOU, i, picked);
+    let dx = 0, dy = 0;
+    if (mine && game.sel === null) dy = Math.round(Math.sin(now / 260 + i * 1.6) * 1.5) - 1;
+    if (over && !picked) dy -= 4;
+    if (now - game.wiggle < 400) dx = Math.round(Math.sin((now - game.wiggle) / 35) * 2);
+    drawSack(s, p.x + dx, p.y + dy, now);
+    if (picked) sackBox(p.x, p.y, PAL.F);
+    else if (over) box(R0(p.x) - 19, R0(p.y + dy) - 21, 38, 42, PAL.L);
   });
   st.hands[RIVAL].forEach((s, i) => {
     if (hidden.has(s.id)) return;
@@ -387,57 +406,45 @@ function renderBoard(now) {
     if (picked) { drawSack(s, p.x, p.y, now); sackBox(p.x, p.y, PAL.E); } else drawBack(p.x, p.y);
   });
 
-  // right panel
+  // right panel: whose turn and what happened; round results also land here
   const px = 541;
-  if (game.banner || game.screen !== 'play') drawText(ctx, 'ROUND OVER', px, 72, PAL.F, { scale: 2, align: 'center' });
-  else if (st.turn === YOU) drawText(ctx, 'YOUR TURN', px, 72, PAL.F, { scale: 2, align: 'center' });
-  else drawText(ctx, `${r.name}'S TURN`, px, 72, PAL.E, { scale: 2, align: 'center' });
-  if (target) {
-    const t = target, rivalDoor = game.st.chutes[t.k][1];
-    drawText(ctx, `PREVIEW: ${label(t.sack)} INTO ${CHUTE_NAMES[t.k]} CHUTE`, px, 94, PAL.F, { align: 'center' });
-    drawText(ctx, `FALLS TO ${r.name}: ${label(t.dropped)}`, 458, 112, bad(t.dropped.v));
-    drawText(ctx, `ON YOUR DOORSTEP: ${label(t.sack)}`, 458, 126, good(t.sack.v));
-    drawText(ctx, `ON ${r.name}'S DOORSTEP: ${label(rivalDoor)}`, 458, 140, PAL.C);
-    wrap(`${r.name} CAN PUSH YOUR DOORSTEP SACK INTO YOUR YARD.`, 166)
-      .forEach((line, j) => drawText(ctx, line, 458, 158 + j * 11, PAL.C));
-    drawText(ctx, game.armed !== null ? 'TAP AGAIN TO SHOVE' : 'CLICK TO SHOVE', px, 196, PAL.F, { align: 'center' });
+  if (game.screen !== 'play') renderResult(px);
+  else if (game.banner) {
+    drawText(ctx, game.banner, px, 72, PAL.F, { scale: 2, align: 'center' });
+    drawText(ctx, 'EACH CHUTE END FALLS TO ITS SIDE', px, 92, PAL.C, { align: 'center' });
   } else {
-    if (yourMove()) drawText(ctx, 'PICK A SACK, THEN A CHUTE', px, 92, PAL.C, { align: 'center' });
+    if (st.turn === YOU) drawText(ctx, 'YOUR TURN', px, 72, PAL.F, { scale: 2, align: 'center' });
+    else drawText(ctx, `${r.name}'S TURN`, px, 72, PAL.E, { scale: 2, align: 'center' });
+    if (mine) drawText(ctx, game.sel === null ? 'PICK A SACK FROM YOUR HAND' : 'NOW PICK A CHUTE', px, 92, PAL.C, { align: 'center' });
     else if (game.ai?.move) drawText(ctx, `SHOVES ${label(st.hands[RIVAL][game.ai.move.h])} INTO THE ${CHUTE_NAMES[game.ai.move.k]} CHUTE`, px, 92, PAL.E, { align: 'center' });
-    else if (st.turn === RIVAL && !game.anim && game.screen === 'play') drawText(ctx, 'THINKING...', px, 92, PAL.C, { align: 'center' });
-    game.log.forEach((e, j) => drawText(ctx, e.text, 458, 136 + j * 12, e.color));
+    else if (st.turn === RIVAL && !game.anim) drawText(ctx, 'THINKING...', px, 92, PAL.C, { align: 'center' });
   }
+  if (game.screen === 'play') game.log.forEach((e, j) => drawText(ctx, e.text, 458, 136 + j * 12, e.color));
 
   // flying sacks
   if (game.anim) for (const f of game.anim.flyers) { const p = flyerPos(f, now); drawSack(f.sack, p.x, p.y, now); }
 
-  if (game.banner) {
-    ctx.fillStyle = PAL.k; ctx.fillRect(140, 162, 360, 32);
-    box(141, 163, 358, 30, PAL.F);
-    drawText(ctx, game.banner, 320, 171, PAL.F, { scale: 2, align: 'center' });
+  // scores flying to the totals
+  for (const f of game.floaters) {
+    const t = Math.max(0, (now - f.t0) / (f.end - f.t0)), e = ease(t);
+    const x = f.x0 + (f.x1 - f.x0) * e, y = f.y0 + (f.y1 - f.y0) * e - Math.sin(Math.PI * t) * 10;
+    drawText(ctx, (f.v > 0 ? '+' : '') + f.v, x, y, f.v > 0 ? PAL.Y : f.v < 0 ? PAL.E : PAL.C, { scale: 2, align: 'center', shadow: PAL.k });
   }
-  button(598, 4, 38, 13, 'MENU', () => { game.screen = 'select'; game.anim = null; game.ai = null; });
+  button(8, 336, 38, 12, 'MENU', () => { game.screen = 'select'; game.anim = null; game.ai = null; });
 }
 
-function renderResult() {
+// Small result block in the side panel instead of a popup over the board.
+function renderResult(px) {
   const { a, b, winner } = game.result, r = rival(), match = game.screen === 'matchEnd';
-  ctx.drawImage(shade, 0, 0);
-  const x = 150, y = 92, w = 340, h = 170;
-  ctx.fillStyle = PAL.k; ctx.fillRect(x, y, w, h);
-  ctx.fillStyle = PAL.d; ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
-  box(x + 2, y + 2, w - 4, h - 4, PAL.b, 2);
-  drawText(ctx, `ROUND ${game.round}`, 320, y + 12, PAL.C, { align: 'center' });
-  drawText(ctx, `YOU ${a}  -  ${b} ${r.name}`, 320, y + 28, PAL.c, { scale: 2, align: 'center' });
-  let msg, col;
-  if (match) { msg = winner === YOU ? 'YOU WIN THE MATCH!' : `${r.name} WINS THE MATCH`; col = winner === YOU ? PAL.G : PAL.E; }
-  else if (winner === null) { msg = 'A DRAW - NOBODY SCORES'; col = PAL.C; }
-  else { msg = winner === YOU ? 'YOU WIN THE ROUND!' : `${r.name} WINS THE ROUND`; col = winner === YOU ? PAL.G : PAL.E; }
-  drawText(ctx, msg, 320, y + 58, col, { scale: 2, align: 'center', shadow: PAL.k });
-  drawText(ctx, `ROUNDS WON:  YOU ${game.wins[YOU]} - ${game.wins[RIVAL]} ${r.name}`, 320, y + 88, PAL.C, { align: 'center' });
+  const youWin = winner === YOU, col = winner === null ? PAL.C : youWin ? PAL.G : PAL.E;
+  const head = match ? (youWin ? 'MATCH WON!' : 'MATCH LOST') : winner === null ? 'DRAW' : youWin ? 'ROUND WON!' : 'ROUND LOST';
+  drawText(ctx, head, px, 72, col, { scale: 2, align: 'center' });
+  drawText(ctx, `ROUND ${game.round}: YOU ${a} - ${b} ${r.name}`, px, 94, PAL.c, { align: 'center' });
+  drawText(ctx, `ROUNDS: YOU ${game.wins[YOU]} - ${game.wins[RIVAL]} ${r.name}`, px, 108, PAL.C, { align: 'center' });
   if (match) {
-    button(x + 40, y + 120, 120, 22, 'REMATCH', () => startMatch(game.rival));
-    button(x + 180, y + 120, 120, 22, 'NEW RIVAL', () => { game.screen = 'select'; });
-  } else button(x + 110, y + 120, 120, 22, 'NEXT ROUND', startRound);
+    button(462, 130, 76, 18, 'REMATCH', () => startMatch(game.rival));
+    button(544, 130, 76, 18, 'NEW RIVAL', () => { game.screen = 'select'; });
+  } else button(486, 130, 110, 18, 'NEXT ROUND', startRound);
 }
 
 function render(now) {
@@ -446,7 +453,6 @@ function render(now) {
   if (game.screen === 'select') renderSelect(now);
   else {
     renderBoard(now);
-    if (game.screen !== 'play') { game.buttons = []; renderResult(); }
   }
   drawText(ctx, HINT, 320, 351, PAL.C, { align: 'center' });
 }
@@ -469,21 +475,23 @@ const handAt = (p) => L.handX.findIndex((hx, i) => i < game.st.hands[YOU].length
 cv.addEventListener('pointermove', (e) => {
   game.mouse = toCanvas(e);
   if (e.pointerType === 'mouse' && game.screen === 'play') {
-    const k = chuteAt(game.mouse);
+    const k = chuteAt(game.mouse), h = handAt(game.mouse);
     game.hover = k >= 0 ? k : null;
+    game.handHover = h >= 0 ? h : null;
   }
 });
-cv.addEventListener('pointerleave', () => { game.mouse = { x: -1, y: -1 }; game.hover = null; });
+cv.addEventListener('pointerleave', () => { game.mouse = { x: -1, y: -1 }; game.hover = null; game.handHover = null; });
 cv.addEventListener('pointerdown', (e) => {
   if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
   const p = game.mouse = toCanvas(e);
   const b = game.buttons.find((q) => p.x >= q.x && p.x < q.x + q.w && p.y >= q.y && p.y < q.y + q.h);
   if (b) { sfx.tick(); b.onClick(); return; }
   if (!yourMove()) return;
-  const h = handAt(p);
-  if (h >= 0) { game.sel = h; game.armed = null; sfx.tick(); return; }
+  const st = game.st, h = handAt(p);
+  if (h >= 0) { game.sel = game.sel === h && st.hands[YOU].length > 1 ? null : h; game.armed = null; sfx.tick(); return; }
   const k = chuteAt(p);
   if (k < 0) { game.armed = null; return; }
+  if (game.sel === null) { game.wiggle = performance.now(); sfx.tick(); return; } // nudge the player toward the hand
   if (e.pointerType !== 'mouse' && game.armed !== k) { game.armed = k; return; } // touch: first tap previews
   startShove(YOU, game.sel, k, performance.now());
 });
