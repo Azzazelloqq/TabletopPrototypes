@@ -94,6 +94,7 @@ const sfx = {
   loot: i => tone(440 * 2 ** (i * 2 / 12), 0.08, 'square', 0.035),
   tick: () => tone(1100, 0.012, 'square', 0.012),
   click: () => tone(660, 0.04, 'square', 0.03),
+  clank: () => { tone(1250, 0.18, 'square', 0.04, -300); tone(1870, 0.12, 'triangle', 0.05, -500); },
   win: () => [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.18, 'square', 0.04, 0, i * 0.1)),
   lose: () => [392, 330, 262].forEach((f, i) => tone(f, 0.25, 'triangle', 0.08, 0, i * 0.15)),
 };
@@ -150,13 +151,14 @@ let aiPreview = null;            // move the opponent is about to make
 let overlay = null;              // { lines, buttons }
 let banner = null;               // { text, sub, t0 }
 let figureShake = 0;
+let blockFlash = null;           // { side, t, until }: the top die that stopped a raid
 const shown = [0, 0];            // displayed totals counting toward the real ones
 const pop = [0, 0];
 let buttons = [];                // clickable rectangles for the current frame
 
 function resetBoardVisuals() {
   flyers = []; particles = []; popups = [];
-  hand = null; choosing = null; hover = null; aiPreview = null; overlay = null; banner = null;
+  hand = null; choosing = null; hover = null; aiPreview = null; overlay = null; banner = null; blockFlash = null;
   shown[0] = shown[1] = 0;
 }
 
@@ -280,29 +282,60 @@ async function moveAnimation(side, die, move) {
     popup(`+${die.v}`, to.x + 7, to.y - 8, side === 0 ? C.glow : C.pale);
     return;
   }
+  // Raid: the thrown die lands on the tower top and knocks dice off one at a time,
+  // until it reaches a die it cannot break (or the tower is gone); then it is spent.
   const target = 1 - side;
   const tower = round.towers[target][move.t];
   const fallen = R.fallingDice(tower, die.v);
-  const top = slotPos(target, move.t, tower.length - 1);
-  await fly(f, top, 320, 40);
-  sfx.crash(fallen.length);
-  shake = Math.max(shake, 2 + fallen.length);
-  burst(top.x + 7, top.y + 6, stoneColours(die.o), 14, 2.2);
-  if (target === 1) figureShake = 18;
   const haul = R.pips(fallen);
   const base = round.loot[side].length;
-  const flights = fallen.map(async (d, i) => {
-    await wait(i * 120);
+  await fly(f, slotPos(target, move.t, tower.length), 320, 40);
+  flyers.push(f);
+  if (target === 1) figureShake = 18;
+  // knock-offs run in sequence; each knocked die's flight to the tray carries on in parallel
+  const landings = [];
+  for (let i = 0; i < fallen.length; i++) {
+    const d = fallen[i];
+    if (i > 0) {
+      // drop onto the next die down
+      const from = f.y;
+      const to = slotPos(target, move.t, tower.length).y;
+      await tween(110, k => { f.y = lerp(from, to, k * k); });
+    }
     tower.pop();
-    const start = slotPos(target, move.t, tower.length);
-    const g = { die: d, x: start.x, y: start.y, flat: true };
-    await fly(g, trayPos(side, base + i), 380, 30 + i * 4);
-    round.loot[side].push(d);
-    sfx.loot(i);
-    const p = trayPos(side, base + i);
-    popup(`+${d.v}`, p.x + 7, p.y - 6, side === 0 ? C.glow : C.pale);
-  });
-  await Promise.all(flights);
+    const hit = slotPos(target, move.t, tower.length);
+    sfx.crash(i);
+    shake = Math.max(shake, 2 + i);
+    burst(hit.x + 7, hit.y + 3, stoneColours(d.o), 8, 1.8);
+    popup(`+${d.v}`, hit.x + (side === 0 ? 22 : -8), hit.y + 2, side === 0 ? C.glow : C.pale);
+    const g = { die: d, x: hit.x, y: hit.y, flat: true };
+    landings.push(fly(g, trayPos(side, base + i), 420, 34).then(() => {
+      round.loot[side].push(d);
+      sfx.loot(i);
+    }));
+    await wait(170);
+  }
+  if (tower.length > 0) {
+    // blocked: the next die holds, the thrown die clanks off it and breaks
+    const from = { x: f.x, y: f.y };
+    const to = slotPos(target, move.t, tower.length).y;
+    await tween(90, k => { f.y = lerp(from.y, to, k * k); });
+    sfx.clank();
+    shake = Math.max(shake, 1.5);
+    blockFlash = { side: target, t: move.t, until: now + 600 };
+    popup('HOLDS', TOWER_X[move.t] + (side === 0 ? -26 : 26), to + 6, C.red2);
+    const dir = move.t === 0 ? -1 : 1;
+    await tween(300, k => { f.x = from.x + dir * 16 * k; f.y = to - 16 * 4 * k * (1 - k) + 8 * k; });
+  } else {
+    // the whole tower is gone: the thrown die smashes on the plinth
+    const from = f.y;
+    const to = slotPos(target, move.t, 0).y;
+    await tween(110, k => { f.y = lerp(from, to, k * k); });
+    sfx.crash(2);
+  }
+  flyers = flyers.filter(other => other !== f);
+  burst(f.x + 7, f.y + 8, stoneColours(die.o), 14, 2);
+  await Promise.all(landings);
   if (fallen.length >= 3 || haul >= 12) {
     shake = Math.max(shake, 7);
     popup('TOPPLE!', 320, 178, C.glow, true, 1300);
@@ -511,7 +544,10 @@ function renderPlay(sx, sy) {
         const p = slotPos(side, t, i);
         const hot = falling.has(d);
         const lift = hot && Math.floor(now / 160) % 2 ? -2 : 0;
-        ctx.drawImage(A.dieSprite(d.v, d.o, hot ? (previewSide === 0 ? 'hi' : 'red') : 'normal'), p.x, p.y + lift);
+        const blocking = blockFlash && now < blockFlash.until && blockFlash.side === side && blockFlash.t === t && i === tower.length - 1;
+        const jitter = blocking ? [1, -1, 0][Math.floor(now / 50) % 3] : 0;
+        const style = hot ? (previewSide === 0 ? 'hi' : 'red') : blocking && Math.floor(now / 100) % 2 ? 'red' : 'normal';
+        ctx.drawImage(A.dieSprite(d.v, d.o, style), p.x + jitter, p.y + lift);
       });
       // during the player's choice, opponent towers that cannot be raided are dimmed
       if (choosing && side === 1 && !moveFor({ side, t }, 0, die.v)) {
